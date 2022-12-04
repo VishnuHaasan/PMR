@@ -5,9 +5,11 @@ import sys
 import pandas as pd
 import json
 import pickle
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error
 import os
+import copy
+import numpy as np
 
 lr = LinearRegression()
 
@@ -31,12 +33,29 @@ def train_loss(m, train, target):
         pred = m.predict(test_x)
         mse = mean_squared_error(y_true=test_y, y_pred=pred)
         pred = m.predict(train)
-        mape = mean_absolute_percentage_error(y_true=target, y_pred=pred)
+        mape = mean_absolute_percentage_error(y_true=target, y_pred=pred)*100
         return {
             "mse": mse,
             "mape": mape,
             "status": "S"
-        }
+        }, m
+    except Exception as e:
+        print(e)
+        return {
+            "status": "E",
+            "err": e
+        }, None
+
+def train_loss_cv(m, train, target):
+    try:
+        mm = copy.deepcopy(m)
+        res, model = train_loss(m, train=train, target=target)
+        if res['status'] == "E":
+            return res
+        cross = cross_val_score(estimator=mm, X=train, y=target, cv=5, scoring='neg_mean_squared_error')
+        res['cv_score'] = np.mean(np.sqrt(cross * -1))
+        return res, model
+        
     except Exception as e:
         print(e)
         return {
@@ -45,43 +64,46 @@ def train_loss(m, train, target):
         }
 
 def write_file(p, data):
-    f = open(f"config/{p}", "w+")
-    json.dump(data, f)
+    f = open(p, "w+")
+    json.dump(data, f, indent=4)
 
 def save_pickle(p, m):
-    f = open(f"pickles/{p}", "wb+")
+    f = open(p, "wb+")
     pickle.dump(m, f)
 
-def execute(model, path, ind, name):
+def execute(model, path, ind, name, target, cv):
     try:
-        df = pd.read_csv(f"data/{path}")
-        print(df.head())
+        df = pd.read_csv(f"{path}")
         m = model_dict[model]
-        file = open(f"config/{name}/index.json")
-        conf = json.load(file)
-        target = df[conf['target']]
-        print(conf['target'])
-        train_df = df.drop(columns=[conf['target']])
-        train_res = train_loss(m=m, train=train_df, target=target)
+        train_df = df.drop(columns=[target])
+        if cv:
+            train_res, m = train_loss_cv(m=m, train=train_df, target=df[target])
+        else:
+            train_res, m = train_loss(m=m, train=train_df, target=df[target])
+        train_res['model'] = model
+        train_res['model_name'] = m.__class__.__name__
         pickle_name = f"model{ind}.pickle"
         conf_name = f"conf{ind}.json"
         pickle_path = f"pickles/{name}/{pickle_name}"
-        conf_path = f"conf/{name}/{conf_name}"
-        save_pickle(pickle_name, m)
-        write_file(conf_name, train_res)
+        conf_path = f"config/{name}/{conf_name}"
+        save_pickle(pickle_path, m)
+        write_file(conf_path, train_res)
         return True
     except Exception as e:
         print(e)
         return False
 
 def init(name):
-    curr = os.getcwd()
-    p = f"{curr}/pickles/{name}"
-    if not os.path.exists(p):
-        os.makedirs(p)
-    p = f"{curr}/config/{name}"
-    if not os.path.exists(p):
-        os.makedirs(p)
+    try:
+        curr = os.getcwd()
+        p = f"{curr}/pickles/{name}"
+        if not os.path.exists(p):
+            os.makedirs(p)
+        # p = f"{curr}/config/{name}"
+        # if not os.path.exists(p):
+        #     os.makedirs(p)
+    except Exception as e:
+        print(e) 
 
     
 
@@ -89,15 +111,13 @@ def init(name):
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    model = args[0]
-    ind = args[1]
-    path = args[2]
-    name = args[3]
-    init(name=name)
-    if execute(model, path, ind, name):
-        print("Success")
-    else:
-        print("Failure")
+    ind = args[0]
+    path = args[1]
+    model = args[2]
+    file = open(path, "r")
+    conf = json.load(fp=file)
+    init(name=conf['name'])
+    execute(model, conf["datapath"], ind, conf["name"], conf["target"], conf["cv"])
 
     
 
